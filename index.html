@@ -3,7 +3,35 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SETLIST — Rock Band Song Search</title>
+<title>Find Your Song — Rock Band Song Search</title>
+<!-- Icons.
+     Tab/favicon uses the simple pick mark — the drum kit has too much detail
+     to survive 16-32px. The full drum-kit icon is used everywhere it's shown
+     large (iPhone home screen, PWA install, link previews). -->
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/icon-mark.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<!-- iOS: allow full-screen standalone mode when saved to home screen -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="description" content="Search every song installed across the Rock Band library. Browse by game, genre, and difficulty, then build and share setlists.">
+<meta name="theme-color" content="#0a0b0f">
+<meta name="application-name" content="Find Your Song">
+<meta name="apple-mobile-web-app-title" content="Find Your Song">
+<!-- Link previews (messaging apps, social) — matters because setlists are shared as links -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Find Your Song">
+<meta property="og:title" content="Find Your Song — Rock Band Song Search">
+<meta property="og:description" content="Search every song installed across the Rock Band library. Browse by game, genre, and difficulty, then build and share setlists.">
+<meta property="og:image" content="/og-image.png">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Find Your Song — Rock Band Song Search">
+<meta name="twitter:description" content="Search every song installed across the Rock Band library. Browse by game, genre, and difficulty, then build and share setlists.">
+<meta name="twitter:image" content="/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo:ital,wght@0,400;0,500;0,600;0,700;1,600&family=Archivo+Black&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -113,7 +141,7 @@
   .sl-modal-msg:empty{display:none; margin:0;}
   .sl-modal-actions{display:flex; gap:10px; justify-content:flex-end; margin-top:18px;}
   .search-row{display:flex; gap:12px; align-items:center;}
-  .search-row input[type="text"]{flex:1; background:var(--bg); border:1px solid var(--hairline); border-radius:10px; padding:16px 18px; color:var(--text); font-size:18px; font-family:'Inter',sans-serif; outline:none; transition:border-color .15s, box-shadow .15s;}
+  .search-row input[type="text"]{flex:1; min-width:0; background:var(--bg); border:1px solid var(--hairline); border-radius:10px; padding:16px 18px; color:var(--text); font-size:18px; font-family:'Inter',sans-serif; outline:none; transition:border-color .15s, box-shadow .15s;}
   .search-row input[type="text"]:focus{border-color:var(--gold-dim); box-shadow:0 0 0 3px rgba(242,183,5,0.12);}
   .random-btn{font-family:'Archivo','Inter',sans-serif; font-size:14px; font-weight:600; letter-spacing:0.04em; padding:16px 20px; border-radius:10px; border:none; background:var(--gold); color:#0a0b0f; cursor:pointer; white-space:nowrap; transition:transform .1s, background .15s, box-shadow .15s; display:flex; align-items:center; gap:8px; box-shadow:0 0 10px color-mix(in srgb, var(--gold) 50%, transparent), 0 0 20px color-mix(in srgb, var(--gold) 25%, transparent);}
   .random-btn:hover{box-shadow:0 0 14px color-mix(in srgb, var(--gold) 65%, transparent), 0 0 26px color-mix(in srgb, var(--gold) 35%, transparent);}
@@ -147,7 +175,9 @@
   tbody td{padding:15px 12px; font-size:18px; vertical-align:middle;}
   td.title-cell{font-weight:600; font-size:19px;} td.sub-cell{color:var(--text-dim); font-size:16px;}
   td.mono{font-family:'Archivo','Inter',sans-serif; color:var(--text-dim); font-size:14px;}
-  .cover{width:84px; height:84px; border-radius:9px; object-fit:cover; background:var(--bg-card); display:block; border:1px solid var(--hairline);}
+  .cover{width:84px; height:84px; border-radius:9px; object-fit:cover; background:var(--bg-card); display:block; border:1px solid var(--hairline); animation:coverFade .28s ease-in;}
+  @keyframes coverFade{ from{opacity:0} to{opacity:1} }
+  .sl-cover{animation:coverFade .28s ease-in;}
   .cover-ph{width:84px; height:84px; border-radius:9px; display:flex; align-items:center; justify-content:center; font-family:'Anton',sans-serif; font-size:34px; color:#0a0b0f; border:1px solid var(--hairline);}
   .gems{display:inline-flex; gap:3px; vertical-align:middle;}
   .gem{width:9px; height:9px; border-radius:2px; transform:rotate(45deg); background:var(--hairline);}
@@ -168,7 +198,14 @@
   .card .meta-row{display:flex; flex-wrap:wrap; gap:6px 14px; font-size:13px; color:var(--text-dim); margin:8px 0 0; font-family:'Archivo','Inter',sans-serif;}
   .card .badges-wrap{margin:12px 0;}
   .card .instruments{border-top:1px solid var(--hairline); padding-top:12px;}
-  @media (max-width:820px){ table{display:none;} .cards{display:block;} .results-meta{flex-direction:column; align-items:flex-start; gap:6px;} .random-btn span.lbl{display:none;} }
+  @media (max-width:820px){
+    table{display:none;} .cards{display:block;}
+    .results-meta{flex-direction:column; align-items:flex-start; gap:6px;}
+    /* Hiding the "Random" label leaves the button too wide with a stale flex gap,
+       which pushed the dice off-centre. Make it a proper square icon button. */
+    .random-btn span.lbl{display:none;}
+    .random-btn{padding:0; gap:0; width:52px; height:52px; flex:0 0 52px; justify-content:center; font-size:20px;}
+  }
   @media (max-width:440px){ .card .cover, .card .cover-ph{width:96px; height:96px;} .card .cover-ph{font-size:40px;} .card{gap:14px; padding:14px;} }
   .empty{text-align:center; padding:70px 24px; color:var(--text-dim);}
   .empty .big{font-family:'Anton',sans-serif; font-size:30px; color:var(--text); margin-bottom:10px; letter-spacing:0.02em;}
@@ -789,7 +826,7 @@ function observeCovers(){
       // when iTunes resolves later, upgrade to it
       onArtUpdate(key, (itunesUrl)=>{ showUrl(itunesUrl); });
     });
-  }, {rootMargin:"250px"});
+  }, {rootMargin:"1200px"});
   document.querySelectorAll('#main .cover-ph').forEach(el=>io.observe(el));
 }
 
@@ -1588,6 +1625,36 @@ window.addEventListener('scroll', ()=>{ markInteracting(); }, {passive:true});
 // kick off the slow background sweep after initial paint
 queueReady = true;              // queue vars above are now initialized; safe to pump
 setTimeout(pumpQueue, 1500);
+
+/* ---- Fast Deezer prefetch sweep ------------------------------------------
+   The main pumpQueue is paced for iTunes' strict ~20/min limit, which means a
+   full sweep of the library takes ~35 minutes — far too slow to stay ahead of
+   scrolling, so covers pop in late and flicker from placeholder to art.
+   Deezer's limit is far more generous (~50 req / 5s), so we sweep it on its
+   own timer. Deezer supplies the cover fast; iTunes still upgrades it later
+   via the existing queue. This does NOT touch the iTunes rate budget. */
+const DZ_SWEEP_BATCH = 6;      // songs queued per tick
+const DZ_SWEEP_MS = 900;       // tick interval  (~6.7 lookups/sec worst case)
+let dzSweepIdx = 0;
+function dzSweep(){
+  if(navigator.onLine === false) return;          // don't burn lookups offline
+  // don't compete with the user's own scrolling burst
+  if(dzQueue.length > 24) return;
+  let queued = 0;
+  while(dzSweepIdx < SONGS.length && queued < DZ_SWEEP_BATCH){
+    const s = SONGS[dzSweepIdx++];
+    const k = artKey(s);
+    const e = artCache[k];
+    // skip anything already resolved or already in flight
+    if(e && (e.itunes || e.deezer || e.deezer==="")) continue;
+    if(!e) artCache[k] = { itunes:null, deezer:null };
+    deezerLookup(s, k);
+    queued++;
+  }
+  if(dzSweepIdx >= SONGS.length) clearInterval(dzSweepTimer);
+}
+const dzSweepTimer = setInterval(dzSweep, DZ_SWEEP_MS);
+setTimeout(dzSweep, 800);
 // Genre/year auto-fill is retained for future songs added from a new CSV export,
 // but every song currently has a genre and year baked in, so there's nothing to
 // do on load. Call pumpGenre() manually if you ever add songs missing that data.

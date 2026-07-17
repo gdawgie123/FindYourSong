@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <!-- FIX: span the kit's real vertical extent (y 130 -> 440), not 0->1 -->
+    <linearGradient id="kit" x1="0" y1="130" x2="0" y2="440" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#3ecf5a"/>
+      <stop offset="0.52" stop-color="#f2c811"/>
+      <stop offset="1"    stop-color="#3b9dff"/>
+    </linearGradient>
+    <!-- subtle shading to lift it off flat-vector territory -->
+    <linearGradient id="shade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0"   stop-color="#000" stop-opacity="0.28"/>
+      <stop offset="0.4" stop-color="#000" stop-opacity="0"/>
+      <stop offset="0.75" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1"   stop-color="#000" stop-opacity="0.30"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="#0a0b0f"/>
+
+  <!-- centring transform: measured bbox was off-centre (dx +10.5, dy -45.5)
+       and nearly touching the left edge; this centres and pads the kit -->
+  <g transform="translate(33.3,-17.5) scale(0.9071)">
+
+  <g stroke="#07080b" stroke-width="4.5" stroke-linecap="round">
+
+    <!-- ===== hardware ===== -->
+    <g stroke="url(#kit)" fill="none">
+      <path d="M108 176 L116 306" stroke-width="6"/>
+      <path d="M116 306 L88 378 M116 306 L146 378 M116 306 L116 370" stroke-width="5"/>
+      <path d="M404 158 L396 306" stroke-width="6"/>
+      <path d="M396 306 L368 378 M396 306 L426 378 M396 306 L396 370" stroke-width="5"/>
+      <path d="M64 230 L68 350" stroke-width="5"/>
+      <path d="M68 350 L44 396 M68 350 L94 396" stroke-width="4.5"/>
+    </g>
+
+    <!-- ===== cymbals (tilted) ===== -->
+    <g fill="url(#kit)">
+      <g transform="rotate(-15 116 176)">
+        <ellipse cx="116" cy="176" rx="78" ry="10"/>
+        <ellipse cx="116" cy="176" rx="12" ry="3.5" fill="#07080b" stroke="none" opacity=".7"/>
+      </g>
+      <g transform="rotate(13 404 158)">
+        <ellipse cx="404" cy="158" rx="72" ry="9.5"/>
+        <ellipse cx="404" cy="158" rx="11" ry="3" fill="#07080b" stroke="none" opacity=".7"/>
+      </g>
+      <g transform="rotate(-9 66 222)">
+        <ellipse cx="66" cy="222" rx="50" ry="7"/>
+        <ellipse cx="66" cy="240" rx="50" ry="7"/>
+      </g>
+    </g>
+
+    <!-- ===== rack toms (angled) ===== -->
+    <g fill="url(#kit)">
+      <g transform="rotate(-17 200 252)">
+        <rect x="158" y="230" width="88" height="68" rx="9"/>
+        <ellipse cx="202" cy="232" rx="44" ry="13"/>
+        <rect x="158" y="230" width="88" height="68" rx="9" fill="url(#shade)" stroke="none"/>
+      </g>
+      <g transform="rotate(15 318 250)">
+        <rect x="276" y="228" width="88" height="68" rx="9"/>
+        <ellipse cx="320" cy="230" rx="44" ry="13"/>
+        <rect x="276" y="228" width="88" height="68" rx="9" fill="url(#shade)" stroke="none"/>
+      </g>
+    </g>
+
+    <!-- ===== snare ===== -->
+    <g fill="url(#kit)">
+      <g transform="rotate(-7 130 306)">
+        <rect x="88" y="292" width="86" height="48" rx="7"/>
+        <ellipse cx="131" cy="294" rx="43" ry="12"/>
+        <rect x="88" y="292" width="86" height="48" rx="7" fill="url(#shade)" stroke="none"/>
+      </g>
+    </g>
+
+    <!-- ===== kick ===== -->
+    <circle cx="256" cy="344" r="118" fill="url(#kit)"/>
+    <circle cx="256" cy="344" r="118" fill="url(#shade)" stroke="none"/>
+    <g stroke="url(#kit)" fill="none">
+      <path d="M150 396 L124 432 M362 396 L388 432" stroke-width="6"/>
+    </g>
+  </g>
+
+  <!-- kick hoop + inner ring for depth -->
+  <circle cx="256" cy="344" r="118" fill="none" stroke="#07080b" stroke-width="7" opacity=".55"/>
+  <circle cx="256" cy="344" r="97"  fill="none" stroke="#07080b" stroke-width="3.5" opacity=".32"/>
+  <text x="256" y="368" font-family="Archivo Black, Arial Black, Arial, sans-serif"
+        font-size="72" font-weight="900" font-style="italic"
+        text-anchor="middle" fill="#07080b" opacity="0.95">FYS</text>
+  </g>
+</svg>
