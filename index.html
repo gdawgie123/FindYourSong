@@ -901,7 +901,13 @@ function observeCovers(){
             // never race for the same song. Just don't replace a shown image
             // with the identical one.
             if(el.tagName==='IMG' && el.getAttribute('src')===url) return;
-            const cls = el.className;
+            // convert the PLACEHOLDER class to its matching IMAGE class
+            // (e.g. "cover-ph" -> "cover", "sl-cover-ph" -> "sl-cover").
+            // Reusing the placeholder class verbatim left swapped <img>s with
+            // display:flex + no object-fit from the *-ph rules, which is why
+            // list/card covers could stay invisible even once loaded while
+            // the detail view (which does convert its class) worked fine.
+            const cls = el.className.replace(/-ph\b/g, '').trim() || 'cover';
             const src = (artCache[key] && artCache[key].itunes===url) ? 'itunes' : 'deezer';
             el.outerHTML = `<img class="${cls}" src="${url}" alt="${esc(song.song)} cover" data-artid="${id}" data-src="${src}">`;
           });
