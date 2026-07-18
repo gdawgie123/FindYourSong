@@ -397,6 +397,37 @@ function isLiveVersion(s){ return /\((?:[^)]*\s)?live(?:\s[^)]*)?\)|\blive$|-\s*
 // true if a result looks like a live recording (so we can avoid it for live-titled songs)
 function resultIsLive(name){ return /\blive\b|\bin concert\b|\bunplugged\b|\bconcert\b|\bsessions?\b/i.test(name||""); }
 
+/* Artist comparison.
+   Deezer's field:"value" syntax breaks on "&", so we strip it from queries —
+   which turned "Hall & Oates" into "Hall Oates" and then failed to match
+   Deezer's "Hall & Oates". Collapsing "&" and "and" to the same form (and
+   ignoring feat./ft.) fixes those false rejections. */
+/* Some catalogues list an artist under a different name than this library
+   does. Matching correctly rejects those, so map the known aliases instead
+   of loosening the match (which would risk pulling the wrong cover).
+   NOTE: keys must be in artistKey() form — "&" is normalised to "and". */
+const ARTIST_ALIASES = {
+  "hallandoates": ["darylhallandjohnoates"],
+  "machinegunkellyandblackbear": ["mgk", "machinegunkelly"],
+  "machinegunkelly": ["mgk"],
+  "kanye": ["kanyewest"],
+  "kidcudiandkanye": ["kidcudi"],
+};
+function artistKey(a){
+  return (a||"")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/\bfeat\.?\b|\bft\.?\b|\bfeaturing\b/g, " ")
+    .replace(/[^a-z0-9]/g, "");
+}
+function artistMatches(want, got){
+  const w = artistKey(want), g = artistKey(got);
+  if(!w || !g) return false;
+  if(g.includes(w) || w.includes(g)) return true;
+  const aliases = ARTIST_ALIASES[w] || [];
+  return aliases.some(a => g.includes(a) || a.includes(g));
+}
+
 /* Map Apple's primaryGenreName onto your existing tag vocabulary. Close
    matches are allowed (e.g. "Hard Rock" -> Metal). Returns null if there's
    no sensible match, so the song stays N/A rather than getting a bad tag. */
@@ -446,7 +477,8 @@ function rebuildGenreDropdown(){
    first and is shown immediately as a placeholder; when iTunes resolves it
    upgrades the image (iTunes tends to be the more consistent source).
    artCache[key] = { itunes, deezer, best } where best is what to display. */
-function bestUrl(entry){ return (entry && (entry.itunes || entry.deezer)) || ""; }
+// Deezer is primary now, so prefer it; iTunes only fills gaps Deezer left.
+function bestUrl(entry){ return (entry && (entry.deezer || entry.itunes)) || ""; }
 
 function fetchArt(song){
   // returns the current best URL (may be upgraded later via onArtUpdate)
@@ -461,15 +493,35 @@ function fetchArt(song){
     else artWaiters[key] = [resolve];
     if(!entry){
       artCache[key] = { itunes:null, deezer:null };
-      // fire both sources at once
-      runLookup(song, key, 0);
+      // Deezer is the primary source: it's far more reliable and much less
+      // rate-limited than iTunes (measured: 8 rapid calls, 0 failures, while
+      // iTunes was hard-blocking every request). Fire Deezer immediately.
       deezerLookup(song, key);
+      // iTunes runs only as a GAP-FILLER, once Deezer has had its chance --
+      // it still covers ~29 songs Deezer doesn't have, so we don't drop it,
+      // but it no longer competes for the critical path.
+      queueItunesGapFill(song, key);
     } else {
       // partially cached (e.g. restored Deezer-only from storage): fetch just what's missing
-      if(entry.itunes==null){ entry.itunes=null; runLookup(song, key, 0); }
       if(entry.deezer==null){ entry.deezer=null; deezerLookup(song, key); }
+      if(entry.itunes==null){ entry.itunes=null; queueItunesGapFill(song, key); }
     }
   });
+}
+
+/* iTunes gap-fill: only look a song up on iTunes if Deezer failed to supply a
+   cover for it. Waits for the Deezer result first, so the ~29 songs Deezer
+   lacks still get art, while the other ~584 never spend an iTunes request. */
+function queueItunesGapFill(song, key){
+  const check = ()=>{
+    const e = artCache[key];
+    if(!e) return;
+    if(e.deezer == null){ setTimeout(check, 700); return; }   // Deezer still pending
+    if(e.deezer){ e.itunes = e.itunes==null ? "" : e.itunes; return; }  // Deezer covered it
+    if(e.itunes != null) return;                              // already handled
+    runLookup(song, key, 0);                                  // genuine gap -> ask iTunes
+  };
+  setTimeout(check, 700);
 }
 
 // notify UI when a better (iTunes) image arrives so it can swap in
@@ -550,14 +602,9 @@ function runLookup(song, key, attempt){
     if(done) return;                 // ignore late/stale responses after timeout
     done=true; let url="";
     if(data && data.resultCount && data.results.length){
-      const want = song.artist.toLowerCase().replace(/[^a-z0-9]/g,"");
       const preferStudio = isLiveVersion(song);
       // keep only results whose artist genuinely matches
-      const matches = data.results.filter(r=>{
-        const got = (r.artistName||"").toLowerCase().replace(/[^a-z0-9]/g,"");
-        if(!got || !want) return false;
-        return got.includes(want) || want.includes(got);
-      });
+      const matches = data.results.filter(r=> artistMatches(song.artist, r.artistName));
       // score each candidate: higher is better
       const score = r=>{
         let sc = 0;
@@ -576,15 +623,16 @@ function runLookup(song, key, attempt){
     cleanup();
     if(!url && attempt<2){ runLookup(song, key, attempt+1); return; } // retry with a looser iTunes query
     // url found OR genuine "not found" (empty results) -> record as a settled result
+    noteItunesSuccess();            // a real response: clear any backoff
     recordArt(key, "itunes", url);
   };
   function cleanup(){ try{delete window[cb];}catch(e){window[cb]=undefined;} if(script.parentNode) script.parentNode.removeChild(script); }
   // network error / blocked / rate-limited: mark as a TRANSIENT failure so it can be retried later
-  script.onerror=function(){ if(!done){ done=true; cleanup(); if(attempt<2){ runLookup(song,key,attempt+1); } else { recordArtFail(key,"itunes"); } } };
+  script.onerror=function(){ if(!done){ done=true; cleanup(); noteItunesFailure(); if(attempt<2 && itunesAvailable()){ runLookup(song,key,attempt+1); } else { recordArtFail(key,"itunes"); } } };
   script.src = "https://itunes.apple.com/search?media=music&entity=song&limit=5&callback="+cb+"&term="+encodeURIComponent(term);
   document.body.appendChild(script);
   // timeout is also treated as transient (often a rate-limit stall), so it can be retried later
-  setTimeout(()=>{ if(!done){ done=true; cleanup(); if(attempt<2){ runLookup(song,key,attempt+1); } else { recordArtFail(key,"itunes"); } } }, 8000);
+  setTimeout(()=>{ if(!done){ done=true; cleanup(); noteItunesFailure(); if(attempt<2 && itunesAvailable()){ runLookup(song,key,attempt+1); } else { recordArtFail(key,"itunes"); } } }, 8000);
 }
 
 /* Deezer fallback — free, no auth, JSONP-friendly. Only runs when iTunes
@@ -619,11 +667,46 @@ function pumpDeezer(){
 }
 function deezerDone(){ dzInFlight = Math.max(0, dzInFlight-1); pumpDeezer(); }
 
+/* Last-resort cover: an artist's photo from Deezer.
+   Only used when no track/album art exists anywhere (e.g. the artist is in
+   Deezer's catalogue but has no tracks). Matching is deliberately STRICT —
+   a loose search for "Hypernova" also returns "HyperNoiz", "HyperBoat" etc,
+   and a wrong band's photo is worse than a plain placeholder. */
+function deezerArtistPhoto(song, key){
+  const cb = "dza2_" + (jsonpId++);
+  const clean = v => (v||"").replace(/["&]/g," ").replace(/\s+/g," ").trim();
+  const script = document.createElement('script');
+  let done = false;
+  window[cb] = function(data){
+    if(done) return;
+    done = true;
+    let url = "";
+    const list = (data && data.data) ? data.data : [];
+    // require an exact normalised name match, not just a fuzzy contains
+    const want = artistKey(song.artist);
+    const exact = list.find(a => artistKey(a.name) === want);
+    if(exact){ url = exact.picture_xl || exact.picture_big || exact.picture_medium || ""; }
+    cleanup();
+    recordArt(key, "deezer", url);   // "" if still nothing -> placeholder stays
+  };
+  function cleanup(){ try{delete window[cb];}catch(e){window[cb]=undefined;} if(script.parentNode) script.parentNode.removeChild(script); }
+  script.onerror = function(){ if(!done){ done=true; cleanup(); recordArt(key,"deezer",""); } };
+  script.src = "https://api.deezer.com/search/artist?output=jsonp&callback="+cb+"&q="+encodeURIComponent(clean(song.artist));
+  document.body.appendChild(script);
+  setTimeout(()=>{ if(!done){ done=true; cleanup(); recordArt(key,"deezer",""); } }, 8000);
+}
+
 function deezerLookupRaw(song, key, attempt){
   const cb = "dzc_" + (jsonpId++);
+  attempt = attempt || 0;
   // strip characters that break Deezer's field:"value" query syntax (quotes, &, etc.)
   const clean = v => (v||"").replace(/["&]/g," ").replace(/\s+/g," ").trim();
-  const q = `artist:"${clean(song.artist)}" track:"${clean(cleanTitle(song.song))}"`;
+  // attempt 0/1: strict field query. attempt 2: relaxed plain-text search —
+  // the strict form returns nothing for some artists (e.g. names with "&"),
+  // whereas a plain query finds them; artistMatches() still guards accuracy.
+  const q = (attempt >= 2)
+    ? `${clean(song.artist)} ${clean(cleanTitle(song.song))}`
+    : `artist:"${clean(song.artist)}" track:"${clean(cleanTitle(song.song))}"`;
   const script = document.createElement('script');
   let done=false;
   window[cb] = function(data){
@@ -632,19 +715,14 @@ function deezerLookupRaw(song, key, attempt){
     // Deezer signals throttling with an error object; retry once after a back-off
     if(data && data.error && /limit|quota/i.test((data.error.message||data.error.type||""))){
       cleanup(); deezerDone();
-      if((attempt||0) < 1){ setTimeout(()=>deezerLookup(song, key, (attempt||0)+1), 1500); }
+      if(attempt < 1){ setTimeout(()=>deezerLookup(song, key, attempt+1), 1500); }
       else { recordArt(key,"deezer",""); }
       return;
     }
     const list = (data && data.data) ? data.data : [];
     if(list.length){
-      const want = song.artist.toLowerCase().replace(/[^a-z0-9]/g,"");
       const preferStudio = isLiveVersion(song);
-      const matches = list.filter(r=>{
-        const got = ((r.artist&&r.artist.name)||"").toLowerCase().replace(/[^a-z0-9]/g,"");
-        if(!got || !want) return false;
-        return got.includes(want) || want.includes(got);
-      });
+      const matches = list.filter(r=> artistMatches(song.artist, (r.artist && r.artist.name)));
       const score = r=>{
         let sc = 0;
         const albTitle = (r.album && r.album.title) || "";
@@ -661,6 +739,13 @@ function deezerLookupRaw(song, key, attempt){
       }
     }
     cleanup(); deezerDone();
+    // No usable match from the strict field query? Try once more with the
+    // relaxed plain-text form before declaring a miss.
+    if(!url && attempt < 2){ deezerLookup(song, key, 2); return; }
+    // Still nothing: some artists exist on Deezer with no tracks at all, so no
+    // album art can ever be found. Fall back to their artist photo rather than
+    // showing a bare placeholder.
+    if(!url){ deezerArtistPhoto(song, key); return; }
     recordArt(key, "deezer", url);   // Deezer result (may be "" ) — shown as placeholder until iTunes upgrades
   };
   function cleanup(){ try{delete window[cb];}catch(e){window[cb]=undefined;} if(script.parentNode) script.parentNode.removeChild(script); }
@@ -812,7 +897,10 @@ function observeCovers(){
           const els = document.querySelectorAll(`#main [data-artid="${id}"]`);
           els.forEach(el=>{
             // don't downgrade: if an iTunes image is already shown here, keep it
-            if(el.tagName==='IMG' && el.dataset.src==='itunes') return;
+            // Deezer is primary; iTunes only fills genuine gaps, so the two
+            // never race for the same song. Just don't replace a shown image
+            // with the identical one.
+            if(el.tagName==='IMG' && el.getAttribute('src')===url) return;
             const cls = el.className;
             const src = (artCache[key] && artCache[key].itunes===url) ? 'itunes' : 'deezer';
             el.outerHTML = `<img class="${cls}" src="${url}" alt="${esc(song.song)} cover" data-artid="${id}" data-src="${src}">`;
@@ -1549,6 +1637,24 @@ checkSharedSetlistLink();   // handle ?#sl= shared setlist links
    we want. Covers you scroll to or open jump the queue so they load first.
    (Cache is per-session — browser storage isn't available inside this file.) */
 const RATE_MS = 3300;              // ~18 requests/minute
+/* Adaptive iTunes backoff.
+   Apple hard-blocks a client that overruns its limit — every request then
+   fails in ~50ms. Retrying through that just keeps the queue "busy" for
+   minutes producing nothing, which is what made covers seem stuck. Track
+   consecutive failures and pause iTunes entirely for a while instead;
+   Deezer is unaffected and keeps supplying covers meanwhile. */
+let itunesFailStreak = 0;
+let itunesPausedUntil = 0;
+function noteItunesFailure(){
+  itunesFailStreak++;
+  if(itunesFailStreak >= 4){
+    // exponential-ish pause: 1min, 2min, 4min... capped at 10min
+    const mins = Math.min(10, Math.pow(2, Math.min(3, itunesFailStreak - 4)));
+    itunesPausedUntil = Date.now() + mins*60*1000;
+  }
+}
+function noteItunesSuccess(){ itunesFailStreak = 0; itunesPausedUntil = 0; }
+function itunesAvailable(){ return Date.now() >= itunesPausedUntil; }
 let lastCall = 0;
 let inFlight = false;
 const priorityQueue = [];          // songs the user is looking at now
@@ -1565,11 +1671,15 @@ function nextToFetch(){
     queuedKeys.delete(artKey(s));
     if(!(artKey(s) in artCache)) return s;
   }
-  // iTunes retries (transient failures) — paced through this same queue
-  while(itunesRetryQueue.length){
-    const job = itunesRetryQueue.shift();
-    const e = artCache[job.key];
-    if(e && !e.itunes){ return {__retry:true, song:job.song, key:job.key}; }
+  // iTunes retries (transient failures) — paced through this same queue.
+  // Skip them entirely while Apple is blocking us: grinding through a backlog
+  // at RATE_MS each just keeps the queue busy for minutes achieving nothing.
+  if(itunesAvailable()){
+    while(itunesRetryQueue.length){
+      const job = itunesRetryQueue.shift();
+      const e = artCache[job.key];
+      if(e && !e.itunes){ return {__retry:true, song:job.song, key:job.key}; }
+    }
   }
   // hold off the background sweep briefly while the user scrolls / views a song
   if(Date.now() < interactingUntil) return null;
@@ -1582,7 +1692,13 @@ function nextToFetch(){
 
 function pumpQueue(){
   if(inFlight) return;
-  if(navigator.onLine === false){ setTimeout(pumpQueue, 3000); return; }   // offline: idle until back
+  // NOTE: deliberately not gating on navigator.onLine here. It reports false
+  // negatives in some browsers/webviews, which would silently block every
+  // cover lookup forever. If we really are offline the request just fails
+  // harmlessly and the normal retry path handles it.
+  // If iTunes is in a backoff there's no point running this slow queue at all;
+  // the fast Deezer sweep keeps covers coming in the meantime.
+  if(!itunesAvailable()){ setTimeout(pumpQueue, 5000); return; }
   const song = nextToFetch();
   if(!song){
     // nothing to do now; if a background sweep remains, re-check shortly
@@ -1633,8 +1749,11 @@ setTimeout(pumpQueue, 1500);
    Deezer's limit is far more generous (~50 req / 5s), so we sweep it on its
    own timer. Deezer supplies the cover fast; iTunes still upgrades it later
    via the existing queue. This does NOT touch the iTunes rate budget. */
-const DZ_SWEEP_BATCH = 6;      // songs queued per tick
-const DZ_SWEEP_MS = 900;       // tick interval  (~6.7 lookups/sec worst case)
+const DZ_SWEEP_BATCH = 10;     // songs queued per tick
+const DZ_SWEEP_MS = 700;       // tick interval — measured: Deezer handles this
+                               // comfortably (8 rapid calls at 150ms, 0 failures,
+                               // ~250ms each), and it's the source that actually
+                               // delivers when iTunes is throttling us.
 let dzSweepIdx = 0;
 function dzSweep(){
   if(navigator.onLine === false) return;          // don't burn lookups offline
