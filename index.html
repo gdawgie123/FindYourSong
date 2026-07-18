@@ -329,7 +329,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "1.0";
+const APP_VERSION = "1.1";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -725,6 +725,7 @@ function deezerLookupRaw(song, key, attempt){
   window[cb] = function(data){
     if(done) return;                 // ignore late/stale responses
     done=true; let url="";
+    noteDeezerResult(true);          // a response arrived: Deezer isn't blocking us
     // Deezer signals throttling with an error object; retry once after a back-off
     if(data && data.error && /limit|quota/i.test((data.error.message||data.error.type||""))){
       cleanup(); deezerDone();
@@ -762,10 +763,10 @@ function deezerLookupRaw(song, key, attempt){
     recordArt(key, "deezer", url);   // Deezer result (may be "" ) — shown as placeholder until iTunes upgrades
   };
   function cleanup(){ try{delete window[cb];}catch(e){window[cb]=undefined;} if(script.parentNode) script.parentNode.removeChild(script); }
-  script.onerror=function(){ if(!done){ done=true; cleanup(); deezerDone(); recordArt(key,"deezer",""); } };
+  script.onerror=function(){ if(!done){ done=true; cleanup(); deezerDone(); noteDeezerResult(false); recordArt(key,"deezer",""); } };
   script.src = "https://api.deezer.com/search?output=jsonp&callback="+cb+"&q="+encodeURIComponent(q);
   document.body.appendChild(script);
-  setTimeout(()=>{ if(!done){ done=true; cleanup(); deezerDone(); recordArt(key,"deezer",""); } }, 8000);
+  setTimeout(()=>{ if(!done){ done=true; cleanup(); deezerDone(); noteDeezerResult(false); recordArt(key,"deezer",""); } }, 8000);
 }
 
 /* ---- Genre filling via Deezer (separate from the iTunes cover pipeline so
@@ -972,20 +973,24 @@ function buildFilters(){
   el.appendChild(clear);
 }
 
-/* Clear every cover cache and re-fetch from scratch. */
+/* Clear the cover caches and re-fetch — GENTLY.
+   The old version wiped everything and immediately re-swept all 619 songs in
+   one burst, which trips Deezer's abuse protection and gets the IP temporarily
+   blocked. Instead we clear the caches, reset the sweep pointer, and let the
+   normal *paced* sweep refill covers gradually (it self-limits well under
+   Deezer's rate cap). Only the covers currently on screen re-fetch right away. */
 function resetCovers(){
   try{ localStorage.removeItem(ART_STORAGE_KEY); }catch(e){}
   try{ localStorage.removeItem(ART_STORAGE_KEY_OLD); }catch(e){}
-  // wipe in-memory state
   for(const k in artCache) delete artCache[k];
   for(const k in shownArt) delete shownArt[k];
   for(const k in artUpdateListeners) delete artUpdateListeners[k];
-  // reset the sweep so it re-scans from the top
+  // reset sweep pointers so the paced background sweep re-scans over time
   dzSweepIdx = 0; bgIdx = 0;
   itunesFailStreak = 0; itunesPausedUntil = 0;
-  render();                 // re-render placeholders, which re-observe & re-fetch
-  if(typeof dzSweep==='function') dzSweep();
-  if(typeof pumpQueue==='function') pumpQueue();
+  render();     // re-renders placeholders; the observer re-fetches only what's
+                // actually visible, and the paced dzSweep timer handles the
+                // rest at its normal safe rate — no all-at-once burst.
 }
 
 function filtered(){
@@ -1806,8 +1811,26 @@ const DZ_SWEEP_MS = 700;       // tick interval — measured: Deezer handles thi
                                // ~250ms each), and it's the source that actually
                                // delivers when iTunes is throttling us.
 let dzSweepIdx = 0;
+/* Deezer block detection.
+   If Deezer starts rejecting every request (IP temporarily blocked after a
+   burst), keep hammering it only makes the block last longer. Track a failure
+   streak and pause the sweep for a few minutes when it trips. */
+let dzFailStreak = 0;
+let dzPausedUntil = 0;
+function noteDeezerResult(ok){
+  if(ok){ dzFailStreak = 0; dzPausedUntil = 0; }
+  else {
+    dzFailStreak++;
+    if(dzFailStreak >= 8){                 // ~8 straight failures = likely blocked
+      dzPausedUntil = Date.now() + 3*60*1000;   // cool off 3 minutes
+    }
+  }
+}
+function dzAvailable(){ return Date.now() >= dzPausedUntil; }
+
 function dzSweep(){
   if(navigator.onLine === false) return;          // don't burn lookups offline
+  if(!dzAvailable()) return;                       // Deezer is blocking us — back off
   // don't compete with the user's own scrolling burst
   if(dzQueue.length > 24) return;
   let queued = 0;
