@@ -44,6 +44,13 @@
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;}
   body{background:radial-gradient(ellipse 900px 500px at 50% -10%, rgba(242,183,5,0.16), transparent 60%), var(--bg); color:var(--text); font-family:'Inter',sans-serif; min-height:100vh; font-size:17px;}
+  /* faint reload-covers control, tucked in the corner */
+  #reloadCovers{position:fixed; top:10px; right:12px; z-index:50; width:28px; height:28px; padding:0;
+    border:none; background:transparent; color:var(--text-dim); opacity:0.28; font-size:16px; line-height:28px;
+    text-align:center; cursor:pointer; border-radius:6px; transition:opacity .15s, color .15s; -webkit-tap-highlight-color:transparent;}
+  #reloadCovers:hover{opacity:0.85; color:var(--text);}
+  #reloadCovers.spinning{animation:rcSpin .8s linear infinite; opacity:0.85;}
+  @keyframes rcSpin{from{transform:rotate(0)} to{transform:rotate(360deg)}}
   ::selection{background:var(--gold); color:#0a0b0f;}
   .wrap{max-width:1240px; margin:0 auto; padding:0 24px 90px;}
   .hero{padding:56px 24px 28px; text-align:center;}
@@ -259,6 +266,7 @@
 </style>
 </head>
 <body>
+<button id="reloadCovers" title="Reload album covers" aria-label="Reload album covers">⟳</button>
 <div class="hero">
   <h1><span class="hl-find">FIND</span> <span class="hl-your">YOUR</span> <span class="hl-song">SONG</span></h1>
   <p class="sub">Search <span class="count" id="totalCount"></span> songs installed across the Rock Band library. Tap any song for full details.</p>
@@ -321,9 +329,11 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
+const APP_VERSION = "1.0";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
-  SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from the iTunes Search API (loads when online). To update the list, send a new CSV export.";
+  SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
+  + "<br><span style=\"opacity:0.5;font-size:12px;\">v" + APP_VERSION + "</span>";
 
 function esc(s){ return (s||"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -332,13 +342,16 @@ function esc(s){ return (s||"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','
    return visits instead of re-running rate-limited API lookups every time.
    Stored shape: { "<artist> <song>": {i:"<itunesUrl>", d:"<deezerUrl>", t:<savedMs>} }
    Entries expire after ART_TTL so covers can refresh/improve occasionally. */
-const ART_STORAGE_KEY = "rbArtCache_v1";
+const ART_STORAGE_KEY = "rbArtCache_v2";   // v2: v1 could store divergent row/card urls; start clean
+const ART_STORAGE_KEY_OLD = "rbArtCache_v1";
 const ART_TTL = 1000*60*60*24*30;   // 30 days
 const artCache = {};       // key -> {itunes, deezer, itunesFailed}
 const artWaiters = {};
 let artSaveTimer = null;
 
 function loadArtCache(){
+  // one-time cleanup of the pre-v2 cache, which could hold divergent urls
+  try{ localStorage.removeItem(ART_STORAGE_KEY_OLD); }catch(e){}
   try{
     const raw = localStorage.getItem(ART_STORAGE_KEY);
     if(!raw) return;
@@ -957,6 +970,22 @@ function buildFilters(){
   clear.className='clear-btn'; clear.textContent='Clear all';
   clear.onclick=()=>{ state.q="";state.games.clear();state.genre="";state.likedOnly=false;document.getElementById('search').value="";sel.value="";el.querySelectorAll('.game-chip').forEach(c=>c.dataset.active="false");const h=document.getElementById('likedToggle');if(h){h.dataset.active="false";}render(); };
   el.appendChild(clear);
+}
+
+/* Clear every cover cache and re-fetch from scratch. */
+function resetCovers(){
+  try{ localStorage.removeItem(ART_STORAGE_KEY); }catch(e){}
+  try{ localStorage.removeItem(ART_STORAGE_KEY_OLD); }catch(e){}
+  // wipe in-memory state
+  for(const k in artCache) delete artCache[k];
+  for(const k in shownArt) delete shownArt[k];
+  for(const k in artUpdateListeners) delete artUpdateListeners[k];
+  // reset the sweep so it re-scans from the top
+  dzSweepIdx = 0; bgIdx = 0;
+  itunesFailStreak = 0; itunesPausedUntil = 0;
+  render();                 // re-render placeholders, which re-observe & re-fetch
+  if(typeof dzSweep==='function') dzSweep();
+  if(typeof pumpQueue==='function') pumpQueue();
 }
 
 function filtered(){
@@ -1639,6 +1668,17 @@ document.getElementById('activeSetlistNew').onclick=async()=>{
 
 buildFilters();
 render();
+
+// faint corner control: clear cover caches and re-fetch
+(function(){
+  const b=document.getElementById('reloadCovers');
+  if(!b) return;
+  b.onclick=()=>{
+    b.classList.add('spinning');
+    resetCovers();
+    setTimeout(()=>b.classList.remove('spinning'), 1200);
+  };
+})();
 checkSharedSetlistLink();   // handle ?#sl= shared setlist links
 
 /* Background cover pre-fetch. Apple rate-limits the iTunes Search API to
