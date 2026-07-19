@@ -359,7 +359,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "2.32";
+const APP_VERSION = "2.34";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -375,6 +375,9 @@ function esc(s){ return (s||"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','
 const ART_STORAGE_KEY = "rbArtCache_v2";   // v2: v1 could store divergent row/card urls; start clean
 const ART_STORAGE_KEY_OLD = "rbArtCache_v1";
 const ART_TTL = 1000*60*60*24*30;   // 30 days
+// Preview clip urls expire far sooner than cover art, so cache them with a
+// short TTL: fresh ones load instantly from cache, stale ones get refetched.
+const PREVIEW_TTL = 1000*60*60*12;  // 12 hours
 const artCache = {};       // key -> {itunes, deezer, itunesFailed}
 const artWaiters = {};
 let artSaveTimer = null;
@@ -393,7 +396,12 @@ function loadArtCache(){
       // only restore entries that actually resolved to something useful
       if(e.i || e.d){
         artCache[k] = { itunes: e.i || null, deezer: e.d || null, itunesFailed:false, savedAt: e.t || now };
-        if(e.p) previewUrls[k] = e.p;   // restore the preview clip url
+        // Restore the preview url only if it's still fresh. Deezer preview urls
+        // expire, so an old one would stall; a recent one loads instantly and
+        // saves a refetch. Stale ones are simply not restored -> refetched on use.
+        if(e.p && e.pt && (now - e.pt) < PREVIEW_TTL){
+          previewUrls[k] = e.p; previewTimes[k] = e.pt;
+        }
       }
     }
   }catch(err){ /* storage unavailable or corrupt — start fresh */ }
@@ -412,7 +420,9 @@ function saveArtCache(){
       if(!e) continue;
       if(e.itunes || e.deezer){
         const rec = { i:e.itunes||"", d:e.deezer||"", t: e.savedAt || now };
-        if(previewUrls[k]) rec.p = previewUrls[k];   // keep the preview clip url too
+        // persist a fresh preview url + its timestamp so it can load instantly
+        // next session (and be treated as expired once it's older than PREVIEW_TTL)
+        if(previewUrls[k] && previewTimes[k]){ rec.p = previewUrls[k]; rec.pt = previewTimes[k]; }
         entries.push([k, rec]);
       }
     }
@@ -800,7 +810,7 @@ function deezerLookupRaw(song, key, attempt){
         url = pick.album.cover_xl || pick.album.cover_big || pick.album.cover_medium || pick.album.cover || "";
       }
       // stash the 30-second preview clip (if any) for the song detail player
-      if(pick && pick.preview){ previewUrls[key] = pick.preview; }
+      if(pick && pick.preview){ previewUrls[key] = pick.preview; previewTimes[key] = Date.now(); }
     }
     cleanup(); deezerDone();
     // No usable match from the strict field query? Try once more with the
@@ -942,6 +952,7 @@ function coverPlaceholder(song, cls){
 let io;
 const shownArt = {};   // songId -> the url we've committed to showing (keeps row & card identical)
 const previewUrls = {}; // artKey -> 30s Deezer preview clip url (for the detail-page player)
+const previewTimes = {}; // artKey -> when that preview url was fetched (for TTL/expiry)
 
 /* One shared <audio> for song previews — only ever one clip plays at a time.
    The button UI updates via the audio's own play/pause/ended events so it stays
@@ -1031,16 +1042,38 @@ function togglePreview(key, btn){
         // Guard: only proceed if this is still the song the user asked for.
         const onReady = ()=>{
           previewAudio.removeEventListener('canplay', onReady);
-          if(previewKey === key){ previewAudio.play().catch(()=>{ markPreviewUnavailable(); }); }
+          if(previewKey === key){ previewAudio.play().catch(()=>{ onStall(); }); }
         };
         previewAudio.addEventListener('canplay', onReady);
-        // if it never becomes playable within a few seconds, surface that
+        // if it never becomes playable within a few seconds, treat as a stall
         setTimeout(()=>{
           previewAudio.removeEventListener('canplay', onReady);
-          if(previewKey === key && previewAudio.paused && previewAudio.readyState === 0){ markPreviewUnavailable(); }
+          if(previewKey === key && previewAudio.paused && previewAudio.readyState === 0){ onStall(); }
         }, 4000);
       });
     }
+  };
+
+  // A stall usually means the cached preview url has EXPIRED (Deezer urls are
+  // time-limited). Refetch a fresh url once and retry before giving up.
+  let refetched = false;
+  const onStall = ()=>{
+    if(refetched){ markPreviewUnavailable(); return; }
+    refetched = true;
+    const song = SONGS.find(s=>artKey(s)===key);
+    if(!song){ markPreviewUnavailable(); return; }
+    delete previewUrls[key];
+    delete previewTimes[key];
+    previewFetchTried[key] = false;      // allow a fresh fetch
+    const b=document.getElementById('previewBtn'); const l=b&&b.querySelector('.preview-label'); if(l) l.textContent='Loading…';
+    fetchPreview(song, key, (ok)=>{
+      if(ok && previewUrls[key] && previewKey===key){
+        previewAudio.src = previewUrls[key];
+        previewAudio.play().catch(()=>markPreviewUnavailable());
+      } else {
+        markPreviewUnavailable();
+      }
+    });
   };
 
   if(previewKey !== key){
@@ -1079,7 +1112,7 @@ function fetchPreview(song, key, cb){
     if(list.length){
       const matches = list.filter(r=> artistMatches(song.artist, (r.artist && r.artist.name)) && r.preview);
       const pick = matches[0] || list.find(r=>r.preview);
-      if(pick && pick.preview){ previewUrls[key] = pick.preview; saveArtCache(); finish(true); return; }
+      if(pick && pick.preview){ previewUrls[key] = pick.preview; previewTimes[key] = Date.now(); saveArtCache(); finish(true); return; }
     }
     finish(false);
   };
