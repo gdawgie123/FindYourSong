@@ -337,7 +337,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "1.7";
+const APP_VERSION = "1.8";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -520,6 +520,12 @@ function fetchArt(song){
     const entry = artCache[key];
     // already have the best possible result (iTunes) — use it, no lookups needed
     if(entry && entry.itunes){ resolve(entry.itunes); return; }
+    // any usable cover already present (e.g. a Deezer url restored from cache) —
+    // resolve right away. Without this, a cached Deezer-only entry whose iTunes
+    // field is still null would fall through to the waiter path and hang forever,
+    // since no network lookup fires to drain the waiter. This was the bug that
+    // left the first screenful of covers stuck until the user interacted.
+    if(entry && bestUrl(entry)){ resolve(bestUrl(entry)); return; }
     // both sources have reported back (even if empty) — nothing more to fetch
     if(entry && entry.itunes!=null && entry.deezer!=null){ resolve(bestUrl(entry)); return; }
     if(artWaiters[key]){ artWaiters[key].push(resolve); }
@@ -921,6 +927,24 @@ const previewUrls = {}; // artKey -> 30s Deezer preview clip url (for the detail
 const previewAudio = new Audio();
 previewAudio.preload = "none";
 let previewKey = null;   // which song's clip is currently loaded
+let previewBtnKey = null; // which song the on-screen detail button is for
+
+// Single, persistent sync — updates whatever preview button is on screen to
+// match playback state. Attached to the audio ONCE (below) so opening many
+// song pages doesn't pile up duplicate listeners on the shared audio element.
+function syncPreviewBtn(){
+  const btn = document.getElementById('previewBtn');
+  if(!btn) return;
+  const playing = previewKey === previewBtnKey && !previewAudio.paused;
+  const icon = btn.querySelector('.preview-icon');
+  const label = btn.querySelector('.preview-label');
+  if(icon) icon.textContent = playing ? '❚❚' : '▶';
+  if(label) label.textContent = playing ? 'Playing…' : 'Preview';
+  btn.classList.toggle('playing', playing);
+}
+previewAudio.addEventListener('play', syncPreviewBtn);
+previewAudio.addEventListener('pause', syncPreviewBtn);
+previewAudio.addEventListener('ended', syncPreviewBtn);
 function stopPreview(){
   try{ previewAudio.pause(); previewAudio.currentTime = 0; }catch(e){}
 }
@@ -1272,14 +1296,7 @@ function openDetail(id){
   // --- song preview player ---
   const previewBtn = document.getElementById('previewBtn');
   if(previewBtn){
-    const syncBtn = ()=>{
-      const isThis = previewKey === dkey;
-      const playing = isThis && !previewAudio.paused;
-      previewBtn.querySelector('.preview-icon').textContent = playing ? '❚❚' : '▶';
-      previewBtn.querySelector('.preview-label').textContent = playing ? 'Playing…' : 'Preview';
-      previewBtn.classList.toggle('playing', playing);
-    };
-    const reveal = ()=>{ if(previewUrls[dkey]){ previewBtn.style.display=''; syncBtn(); } };
+    const reveal = ()=>{ if(previewUrls[dkey]){ previewBtn.style.display=''; syncPreviewBtn(); } };
     reveal();
     // preview may arrive after the page opens (Deezer still resolving)
     onArtUpdate(dkey, reveal);
@@ -1289,10 +1306,10 @@ function openDetail(id){
     // poll briefly in case the preview lands without an art update
     let tries=8; const pv=setInterval(()=>{ reveal(); if(previewUrls[dkey]||--tries<=0) clearInterval(pv); }, 500);
     previewBtn.onclick = ()=>togglePreview(dkey, previewBtn);
-    // keep the button label in sync with actual playback
-    previewAudio.addEventListener('play', syncBtn);
-    previewAudio.addEventListener('pause', syncBtn);
-    previewAudio.addEventListener('ended', syncBtn);
+    // note the song this detail view is for; the (single, persistent) audio
+    // listeners below use it to sync whatever button is currently on screen
+    previewBtnKey = dkey;
+    syncPreviewBtn();
   }
 
   // nav wiring — move within current filtered list if present, else full list
@@ -1780,6 +1797,14 @@ function importSetlists(){
 }
 
 loadArtCache();
+// Safety net: if any fetchArt waiters were created before the cache populated
+// their entry, resolve them now so their covers show without needing a user
+// interaction. (fetchArt also resolves immediately when a cover exists, so this
+// is belt-and-braces for any timing edge.)
+for(const key in artWaiters){
+  const e = artCache[key];
+  if(e && bestUrl(e)){ const best = bestUrl(e); artWaiters[key].forEach(fn=>fn(best)); delete artWaiters[key]; }
+}
 loadSetlists();
 
 // ---- offline awareness: explain missing covers, and don't burn lookups while offline
