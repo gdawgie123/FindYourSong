@@ -359,7 +359,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "2.3";
+const APP_VERSION = "2.32";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -947,7 +947,9 @@ const previewUrls = {}; // artKey -> 30s Deezer preview clip url (for the detail
    The button UI updates via the audio's own play/pause/ended events so it stays
    in sync no matter how playback stops. */
 const previewAudio = new Audio();
-previewAudio.preload = "none";
+previewAudio.preload = "auto";  // buffer as soon as src is set so play() can
+                                // start promptly inside the tap gesture on iOS.
+                                // No cost until a src is assigned (on first tap).
 let previewKey = null;   // which song's clip is currently loaded
 let previewBtnKey = null; // which song the on-screen detail button is for
 
@@ -984,6 +986,22 @@ function syncPreviewBtn(){
 previewAudio.addEventListener('play', syncPreviewBtn);
 previewAudio.addEventListener('pause', syncPreviewBtn);
 previewAudio.addEventListener('ended', syncPreviewBtn);
+// If the clip can't load (e.g. Deezer's preview CDN returns 403 when it's
+// rate-limiting the network), show a brief "Unavailable" state instead of a
+// button that silently does nothing.
+function markPreviewUnavailable(){
+  const btn = document.getElementById('previewBtn');
+  if(!btn) return;
+  const icon = btn.querySelector('.preview-icon');
+  const label = btn.querySelector('.preview-label');
+  if(icon) icon.textContent = '⚠';
+  if(label) label.textContent = 'Unavailable';
+  btn.classList.remove('playing');
+  // revert to a normal Preview button after a moment so they can retry
+  setTimeout(()=>{ if(previewAudio.paused) syncPreviewBtn(); }, 2500);
+}
+previewAudio.addEventListener('error', markPreviewUnavailable);
+previewAudio.addEventListener('stalled', ()=>{ if(previewAudio.readyState === 0) markPreviewUnavailable(); });
 function stopPreview(){
   try{ previewAudio.pause(); previewAudio.currentTime = 0; }catch(e){}
 }
@@ -994,6 +1012,10 @@ function togglePreview(key, btn){
     previewAudio.pause();
     return;
   }
+
+  // show an immediate "loading" hint so the tap feels responsive
+  const b0 = document.getElementById('previewBtn');
+  if(b0){ const l=b0.querySelector('.preview-label'); if(l) l.textContent='Loading…'; }
 
   // Attempt play. On mobile (iOS especially) play() must be called inside the
   // user-gesture that triggered it. If we just changed src, the audio may not
@@ -1009,18 +1031,27 @@ function togglePreview(key, btn){
         // Guard: only proceed if this is still the song the user asked for.
         const onReady = ()=>{
           previewAudio.removeEventListener('canplay', onReady);
-          if(previewKey === key){ previewAudio.play().catch(()=>{}); }
+          if(previewKey === key){ previewAudio.play().catch(()=>{ markPreviewUnavailable(); }); }
         };
         previewAudio.addEventListener('canplay', onReady);
+        // if it never becomes playable within a few seconds, surface that
+        setTimeout(()=>{
+          previewAudio.removeEventListener('canplay', onReady);
+          if(previewKey === key && previewAudio.paused && previewAudio.readyState === 0){ markPreviewUnavailable(); }
+        }, 4000);
       });
     }
   };
 
   if(previewKey !== key){
-    stopPreview();
+    // New song: set the source and play immediately, still inside the tap's
+    // user-gesture. Do NOT call load() first — on iOS Safari load() resets the
+    // element and breaks the gesture chain, so the subsequent play() gets
+    // silently blocked. Setting src already begins loading; play() then plays
+    // as soon as data arrives. (This is why it worked on desktop but not mobile.)
     previewKey = key;
-    previewAudio.src = previewUrls[key];
-    previewAudio.load();          // kick the load explicitly (helps mobile)
+    try{ previewAudio.pause(); previewAudio.currentTime = 0; }catch(e){}
+    if(previewAudio.src !== previewUrls[key]) previewAudio.src = previewUrls[key];
     tryPlay();
   } else {
     // same song, was paused — just resume
