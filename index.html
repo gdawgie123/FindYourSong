@@ -337,7 +337,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "1.6";
+const APP_VERSION = "1.7";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -970,22 +970,22 @@ function fetchPreview(song, key, cb){
 // Load the cover for a single placeholder element (idempotent).
 function loadCover(ph){
   if(!ph || ph._coverLoading) return;
-  ph._coverLoading = true;
+  ph._coverLoading = true;      // provisional guard; cleared below if nothing loads
   const id=+ph.getAttribute('data-artid');
   const song=SONGS[id];
-  if(!song) return;
+  if(!song){ ph._coverLoading = false; return; }
   prioritize(song);
   const key = artKey(song);
 
   // swap every on-page element for this song to the given url (desktop row AND
   // mobile card share this data-artid). shownArt[id] keeps both twins identical.
   const showUrl = (url)=>{
-    if(!url) return;
+    // If no cover is available yet (e.g. the persistent cache hadn't finished
+    // loading when this ran on first paint), release the guard so a later poll
+    // or scroll can retry — otherwise the first ~screenful would stay stuck as
+    // placeholders forever while everything below them loads fine.
+    if(!url){ ph._coverLoading = false; return; }
     shownArt[id] = url;
-    // Swap in the <img> immediately and let it load in place (the .cover CSS
-    // has a fade-in so it doesn't pop). Previously we waited on a hidden
-    // Image() preload first, which downloaded every cover twice and delayed
-    // the swap until the invisible copy finished — a big part of the lag.
     const els = document.querySelectorAll(`#main [data-artid="${id}"]`);
     els.forEach(el=>{
       const want = shownArt[id] || url;
@@ -1049,14 +1049,14 @@ window.addEventListener('scroll', ()=>{
    it only walks the on-screen placeholders and each loadCover is idempotent. */
 let _covPollTimer=null, _covPollLeft=0;
 function kickCoverPoll(){
-  _covPollLeft = 12;                 // ~12 checks
+  _covPollLeft = 16;                 // ~16 checks over ~6.4s — enough to cover the
+                                     // cache finishing to load after first paint
   if(_covPollTimer) return;
   _covPollTimer = setInterval(()=>{
     loadVisibleCovers();
-    // stop once everything on screen is handled, or after the budget runs out
-    const remaining = [...document.querySelectorAll('#main .cover-ph')]
-      .some(ph=>!ph._coverLoading);
-    if(--_covPollLeft <= 0 || !remaining){ clearInterval(_covPollTimer); _covPollTimer=null; }
+    // keep going while any on-screen placeholder still hasn't become an image
+    const stillPlaceholders = document.querySelectorAll('#main .cover-ph').length > 0;
+    if(--_covPollLeft <= 0 || !stillPlaceholders){ clearInterval(_covPollTimer); _covPollTimer=null; }
   }, 400);
 }
 
