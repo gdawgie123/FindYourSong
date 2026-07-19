@@ -223,6 +223,7 @@
   .detail-overlay.open{display:block;}
   .detail{max-width:860px; margin:0 auto; background:linear-gradient(180deg, var(--bg-raised), var(--bg)); border:1px solid var(--hairline); border-radius:20px; overflow:hidden; box-shadow:0 30px 80px rgba(0,0,0,0.6); animation:rise .28s cubic-bezier(.2,.7,.3,1);}
   @keyframes rise{from{opacity:0; transform:translateY(24px) scale(0.98);} to{opacity:1; transform:none;}}
+  @keyframes fadeInOnly{from{opacity:0;} to{opacity:1;}}
   .detail-banner{position:relative; padding:38px 38px 30px; display:flex; gap:30px; align-items:flex-end; overflow:hidden;}
   .detail-banner-bg{position:absolute; inset:0; background-size:cover; background-position:center; filter:blur(18px) saturate(1.3); opacity:0.28; transform:scale(1.12); z-index:0; will-change:transform; contain:paint;}
   .detail-banner-bg::after{content:""; position:absolute; inset:0; background:linear-gradient(180deg, rgba(10,11,15,0.3), var(--bg-raised) 96%);}
@@ -296,6 +297,12 @@
   @media (max-width:640px){
     .detail-overlay{padding:20px 0 0;}   /* full-width on mobile; nav pins to screen bottom */
     .detail{border-radius:16px 16px 0 0; min-height:calc(100vh - 20px);}
+    /* IMPORTANT: use a transform-FREE open animation on mobile. The default
+       "rise" animates translateY on .detail, and a transformed ancestor makes
+       position:fixed children (our bottom nav) pin to the card instead of the
+       viewport — so the nav rode the animation up and snapped into place at the
+       end (the "pop"). Fading with no transform avoids trapping the fixed nav. */
+    .detail{animation:fadeInOnly .22s ease;}
     .detail-banner{flex-direction:column; align-items:flex-start; gap:20px; padding:28px 22px 22px;}
     .detail-cover,.detail-cover-ph{width:140px; height:140px;}
     .detail-body{padding:22px 22px 148px;}   /* bottom padding clears the fixed nav */
@@ -384,7 +391,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "2.36";
+const APP_VERSION = "2.37";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
