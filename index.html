@@ -329,7 +329,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "1.1";
+const APP_VERSION = "1.2";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -891,57 +891,80 @@ function coverPlaceholder(song, cls){
 /* lazy-load list covers */
 let io;
 const shownArt = {};   // songId -> the url we've committed to showing (keeps row & card identical)
+// Load the cover for a single placeholder element (idempotent).
+function loadCover(ph){
+  if(!ph || ph._coverLoading) return;
+  ph._coverLoading = true;
+  const id=+ph.getAttribute('data-artid');
+  const song=SONGS[id];
+  if(!song) return;
+  prioritize(song);
+  const key = artKey(song);
+
+  // swap every on-page element for this song to the given url (desktop row AND
+  // mobile card share this data-artid). shownArt[id] keeps both twins identical.
+  const showUrl = (url)=>{
+    if(!url) return;
+    shownArt[id] = url;
+    const img=new Image();
+    img.onload=()=>{
+      const els = document.querySelectorAll(`#main [data-artid="${id}"]`);
+      els.forEach(el=>{
+        const want = shownArt[id] || url;
+        if(el.tagName==='IMG' && el.getAttribute('src')===want) return;
+        const cls = el.className.replace(/-ph\b/g, '').trim() || 'cover';
+        el.outerHTML = `<img class="${cls}" src="${want}" alt="${esc(song.song)} cover" data-artid="${id}" data-src="deezer">`;
+      });
+    };
+    img.src=url;
+  };
+
+  if(shownArt[id]){
+    showUrl(shownArt[id]);
+  } else {
+    fetchArt(song).then(showUrl);
+    onArtUpdate(key, (itunesUrl)=>{ if(!shownArt[id]) showUrl(itunesUrl); });
+  }
+}
+
 function observeCovers(){
   if(io) io.disconnect();
   io = new IntersectionObserver(entries=>{
     entries.forEach(en=>{
       if(!en.isIntersecting) return;
-      const ph=en.target;
-      const id=+ph.getAttribute('data-artid');
-      const song=SONGS[id];
-      io.unobserve(ph);
-      prioritize(song);
-      const key = artKey(song);
-
-      // helper: swap every on-page element for this song to the given url
-      // (both the desktop table cell AND the mobile card share this data-artid).
-      // We record the chosen url per song so the row and its twin card always
-      // show the SAME image — previously each could resolve fetchArt() at a
-      // different moment and capture different urls (Deezer vs iTunes gap-fill),
-      // which made list and card covers diverge.
-      const showUrl = (url)=>{
-        if(!url) return;
-        shownArt[id] = url;                        // remember what we committed to
-        const img=new Image();
-        img.onload=()=>{
-          const els = document.querySelectorAll(`#main [data-artid="${id}"]`);
-          els.forEach(el=>{
-            const want = shownArt[id] || url;       // always use the committed url
-            if(el.tagName==='IMG' && el.getAttribute('src')===want) return;
-            // convert the PLACEHOLDER class to its matching IMAGE class
-            // (e.g. "cover-ph" -> "cover", "sl-cover-ph" -> "sl-cover").
-            const cls = el.className.replace(/-ph\b/g, '').trim() || 'cover';
-            el.outerHTML = `<img class="${cls}" src="${want}" alt="${esc(song.song)} cover" data-artid="${id}" data-src="deezer">`;
-          });
-        };
-        img.src=url;
-      };
-
-      // If this song's cover was already resolved (e.g. its twin row/card was
-      // shown, or we returned to this view), reuse that exact url immediately
-      // so both twins always match. Otherwise fetch it.
-      if(shownArt[id]){
-        showUrl(shownArt[id]);
-      } else {
-        fetchArt(song).then(showUrl);
-        // when iTunes gap-fills a song Deezer lacked, upgrade to it — but only
-        // if we haven't already committed to a Deezer image for it
-        onArtUpdate(key, (itunesUrl)=>{ if(!shownArt[id]) showUrl(itunesUrl); });
-      }
+      io.unobserve(en.target);
+      loadCover(en.target);
     });
   }, {rootMargin:"1200px"});
   document.querySelectorAll('#main .cover-ph').forEach(el=>io.observe(el));
+
+  // FALLBACK: IntersectionObserver silently fails to fire in some mobile
+  // browsers / webview contexts even for in-viewport elements, which left the
+  // list showing placeholders while the detail view (no observer) worked fine.
+  // So directly load a first screenful, and keep a light watchdog that loads
+  // any placeholder near the viewport on scroll — covers no longer depend on
+  // the observer firing at all.
+  // Deferred: observeCovers() runs during the very first render(), before some
+  // queue vars further down the file are initialized; setTimeout(0) lets the
+  // current stack finish so loadCover()'s dependencies all exist.
+  setTimeout(loadVisibleCovers, 0);
 }
+
+// load every placeholder currently at/near the viewport, no observer needed
+function loadVisibleCovers(){
+  const margin = 1400;
+  document.querySelectorAll('#main .cover-ph').forEach(ph=>{
+    if(ph._coverLoading) return;
+    const r = ph.getBoundingClientRect();
+    if(r.top < window.innerHeight + margin && r.bottom > -margin){ loadCover(ph); }
+  });
+}
+// throttled scroll watchdog as a belt-and-braces backup to the observer
+let _covScrollT;
+window.addEventListener('scroll', ()=>{
+  if(_covScrollT) return;
+  _covScrollT = setTimeout(()=>{ _covScrollT=null; loadVisibleCovers(); }, 200);
+}, {passive:true});
 
 function buildFilters(){
   const el=document.getElementById('filters'); el.innerHTML="";
