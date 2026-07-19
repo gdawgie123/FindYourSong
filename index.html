@@ -229,6 +229,23 @@
   .detail-cover, .detail-cover-ph{position:relative; z-index:1; width:180px; height:180px; border-radius:14px; flex-shrink:0; box-shadow:0 16px 40px rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08);}
   .detail-cover{object-fit:cover;}
   .preview-row{margin-top:12px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;}
+  /* row is present from first paint so it doesn't pop in; states control look:
+     loading = dimmed+non-interactive until the clip url resolves, then ready;
+     none = genuinely no preview for this song, so collapse it away */
+  .preview-row[data-state="loading"]{opacity:0.55; pointer-events:none;}
+  .preview-row[data-state="loading"] .preview-vol{visibility:hidden;}
+  .preview-row[data-state="ready"]{opacity:1; pointer-events:auto;}
+  /* genuinely no preview: show a muted, non-interactive "No preview" button
+     rather than hiding, so it's clear the feature exists but is unavailable here */
+  .preview-row[data-state="none"]{opacity:1;}
+  .preview-row[data-state="none"] .preview-vol{display:none;}
+  .preview-row[data-state="none"] .preview-btn{
+    background:rgba(255,255,255,0.04); border-color:rgba(255,255,255,0.12);
+    color:var(--text-dim); cursor:default;
+  }
+  .preview-row[data-state="none"] .preview-btn:hover{
+    background:rgba(255,255,255,0.04); border-color:rgba(255,255,255,0.12); color:var(--text-dim);
+  }
   .preview-btn{display:inline-flex; align-items:center; gap:8px; padding:9px 16px; border-radius:999px;
     border:1px solid rgba(255,255,255,0.18); background:rgba(255,255,255,0.08); color:var(--text);
     font-family:'Archivo','Inter',sans-serif; font-size:14px; font-weight:600; cursor:pointer;
@@ -251,7 +268,9 @@
   .detail-titles h2{font-family:'Anton',sans-serif; font-weight:400; font-size:clamp(30px,5vw,50px); line-height:1.02; margin:0 0 8px; letter-spacing:0.01em;}
   .detail-titles .artist{font-size:20px; color:var(--text-dim); font-weight:500;}
   .detail-body{padding:28px 38px 40px; position:relative; z-index:1;}
-  .detail-badges{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:26px;}
+  .detail-badges{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:26px;}
+  /* bigger badges on the detail page — the list/setlist ones stay compact */
+  .detail-badges .game-badge{font-size:20px; padding:4px 13px; -webkit-text-stroke:2px #000;}
   .detail-section-label{font-family:'Archivo','Inter',sans-serif; font-size:12px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-dim); margin:0 0 14px;}
   .meta-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:14px; margin-bottom:30px;}
   .meta-item{background:var(--bg-card); border:1px solid var(--hairline); border-radius:10px; padding:14px 16px;}
@@ -279,12 +298,14 @@
     .detail{border-radius:16px 16px 0 0; min-height:calc(100vh - 20px);}
     .detail-banner{flex-direction:column; align-items:flex-start; gap:20px; padding:28px 22px 22px;}
     .detail-cover,.detail-cover-ph{width:140px; height:140px;}
-    .detail-body{padding:22px 22px 110px;}   /* bottom padding clears the fixed nav */
+    .detail-body{padding:22px 22px 128px;}   /* bottom padding clears the fixed nav */
     /* nav pinned to the bottom of the screen: Previous | 🎲 | Next, one row,
        always reachable for quick hopping between songs */
     .detail-nav{
       position:fixed; left:0; right:0; bottom:0; z-index:120; margin-top:0;
-      padding:12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
+      /* extra bottom buffer (22px + safe-area) lifts the buttons clear of the
+         iPhone home-swipe zone so people don't hit a button while swiping up */
+      padding:12px 14px calc(22px + env(safe-area-inset-bottom, 0px));
       gap:10px; background:color-mix(in srgb, var(--bg-raised) 92%, transparent);
       backdrop-filter:blur(10px); border-top:1px solid var(--hairline);
     }
@@ -359,7 +380,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "2.34";
+const APP_VERSION = "2.35";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -1383,7 +1404,7 @@ function openDetail(id){
         <div class="eyebrow">Song Details</div>
         <h2>${esc(s.song)}</h2>
         <div class="artist">${esc(s.artist)}</div>
-        <div class="preview-row" id="previewRow" style="display:none;">
+        <div class="preview-row" id="previewRow" data-state="loading">
           <button id="previewBtn" class="preview-btn">
             <span class="preview-icon">▶</span><span class="preview-label">Preview</span>
           </button>
@@ -1433,15 +1454,31 @@ function openDetail(id){
   const previewBtn = document.getElementById('previewBtn');
   const previewRow = document.getElementById('previewRow');
   if(previewBtn){
-    const reveal = ()=>{ if(previewUrls[dkey] && previewRow){ previewRow.style.display=''; syncPreviewBtn(); } };
-    reveal();
+    // The row is visible from first render (data-state="loading") so it doesn't
+    // pop in abruptly. We just flip it to "ready" once the preview url resolves,
+    // or hide it only if we confirm there's genuinely no preview.
+    const setReady = ()=>{ if(previewUrls[dkey] && previewRow){ previewRow.dataset.state='ready'; syncPreviewBtn(); } };
+    setReady();
     // preview may arrive after the page opens (Deezer still resolving)
-    onArtUpdate(dkey, reveal);
+    onArtUpdate(dkey, setReady);
     // If the cover was already cached, deezerLookup never re-runs and no preview
     // was captured — fetch it directly, just once.
-    if(!previewUrls[dkey]){ fetchPreview(s, dkey, (ok)=>{ if(ok) reveal(); }); }
+    if(!previewUrls[dkey]){
+      fetchPreview(s, dkey, (ok)=>{
+        if(ok){ setReady(); }
+        else if(previewRow && !previewUrls[dkey]){
+          // genuinely no preview for this song — show a clear disabled state
+          previewRow.dataset.state='none';
+          const ic=previewBtn.querySelector('.preview-icon');
+          const lb=previewBtn.querySelector('.preview-label');
+          if(ic) ic.textContent='❌';
+          if(lb) lb.textContent='No preview available';
+          previewBtn.disabled = true;
+        }
+      });
+    }
     // poll briefly in case the preview lands without an art update
-    let tries=8; const pv=setInterval(()=>{ reveal(); if(previewUrls[dkey]||--tries<=0) clearInterval(pv); }, 500);
+    let tries=8; const pv=setInterval(()=>{ setReady(); if(previewUrls[dkey]||--tries<=0) clearInterval(pv); }, 500);
     previewBtn.onclick = ()=>togglePreview(dkey, previewBtn);
     // note the song this detail view is for; the (single, persistent) audio
     // listeners below use it to sync whatever button is currently on screen
