@@ -337,7 +337,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "1.4";
+const APP_VERSION = "1.5";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -371,6 +371,7 @@ function loadArtCache(){
       // only restore entries that actually resolved to something useful
       if(e.i || e.d){
         artCache[k] = { itunes: e.i || null, deezer: e.d || null, itunesFailed:false, savedAt: e.t || now };
+        if(e.p) previewUrls[k] = e.p;   // restore the preview clip url
       }
     }
   }catch(err){ /* storage unavailable or corrupt — start fresh */ }
@@ -388,7 +389,9 @@ function saveArtCache(){
       const e = artCache[k];
       if(!e) continue;
       if(e.itunes || e.deezer){
-        entries.push([k, { i:e.itunes||"", d:e.deezer||"", t: e.savedAt || now }]);
+        const rec = { i:e.itunes||"", d:e.deezer||"", t: e.savedAt || now };
+        if(previewUrls[k]) rec.p = previewUrls[k];   // keep the preview clip url too
+        entries.push([k, rec]);
       }
     }
     const write = list=>{
@@ -925,6 +928,36 @@ function togglePreview(key, btn){
   }
   previewAudio.play().catch(()=>{ /* autoplay/interaction guards — ignore */ });
 }
+
+/* Fetch just the preview clip for one song, on demand.
+   Needed because covers are cached in localStorage, so for already-seen songs
+   deezerLookup() never re-runs and the preview was never captured. This does a
+   single Deezer search and stores the preview url; it does NOT touch the cover
+   cache. Guarded so it only runs once per song. */
+const previewFetchTried = {};
+function fetchPreview(song, key, cb){
+  if(previewUrls[key]){ cb && cb(true); return; }
+  if(previewFetchTried[key]){ cb && cb(!!previewUrls[key]); return; }
+  previewFetchTried[key] = true;
+  const jcb = "pvq_" + (jsonpId++);
+  const clean = v => (v||"").replace(/["&]/g," ").replace(/\s+/g," ").trim();
+  const script = document.createElement('script');
+  let done = false;
+  const finish = (ok)=>{ if(done) return; done=true; try{delete window[jcb];}catch(e){} if(script.parentNode) script.parentNode.removeChild(script); cb && cb(ok); };
+  window[jcb] = function(data){
+    const list = (data && data.data) ? data.data : [];
+    if(list.length){
+      const matches = list.filter(r=> artistMatches(song.artist, (r.artist && r.artist.name)) && r.preview);
+      const pick = matches[0] || list.find(r=>r.preview);
+      if(pick && pick.preview){ previewUrls[key] = pick.preview; saveArtCache(); finish(true); return; }
+    }
+    finish(false);
+  };
+  script.onerror = ()=>finish(false);
+  script.src = "https://api.deezer.com/search?output=jsonp&callback="+jcb+"&q="+encodeURIComponent(`${clean(song.artist)} ${clean(cleanTitle(song.song))}`);
+  document.body.appendChild(script);
+  setTimeout(()=>finish(false), 7000);
+}
 // Load the cover for a single placeholder element (idempotent).
 function loadCover(ph){
   if(!ph || ph._coverLoading) return;
@@ -1241,6 +1274,9 @@ function openDetail(id){
     reveal();
     // preview may arrive after the page opens (Deezer still resolving)
     onArtUpdate(dkey, reveal);
+    // If the cover was already cached, deezerLookup never re-runs and no preview
+    // was captured — fetch it directly, just once.
+    if(!previewUrls[dkey]){ fetchPreview(s, dkey, (ok)=>{ if(ok) reveal(); }); }
     // poll briefly in case the preview lands without an art update
     let tries=8; const pv=setInterval(()=>{ reveal(); if(previewUrls[dkey]||--tries<=0) clearInterval(pv); }, 500);
     previewBtn.onclick = ()=>togglePreview(dkey, previewBtn);
