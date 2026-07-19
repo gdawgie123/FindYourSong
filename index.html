@@ -337,7 +337,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "1.5";
+const APP_VERSION = "1.6";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -416,7 +416,16 @@ function saveArtCache(){
 }
 let jsonpId = 0;
 function artKey(s){ return (s.artist + " " + s.song).toLowerCase(); }
-function cleanTitle(t){ return t.replace(/\s*\((live|album version|single version|remaster(ed)?[^)]*|explicit|clean|radio edit|acoustic)\)/ig,"").trim(); }
+function cleanTitle(t){
+  return t
+    // strip a trailing/inline parenthetical that's just a version/live tag.
+    // handles compound phrases too: "(Live Version)", "(Live at ...)",
+    // "(Remastered 2011)", "(Single Version)", "(2009 Remaster)" etc.
+    .replace(/\s*[\(\[][^\)\]]*\b(live|unplugged|in concert|acoustic|album version|single version|radio edit|remaster(ed)?|mono|stereo|explicit|clean|demo|edit|version)\b[^\)\]]*[\)\]]/ig, "")
+    // also handle a dash-style suffix: "Song - Live" / "Song - 2011 Remaster"
+    .replace(/\s*-\s*(live|unplugged|acoustic|remaster(ed)?[^-]*|[0-9]{4}\s*remaster[^-]*)\s*$/ig, "")
+    .trim();
+}
 function isLiveVersion(s){ return /\((?:[^)]*\s)?live(?:\s[^)]*)?\)|\blive$|-\s*live\b/i.test(s.song); }
 // true if a result looks like a live recording (so we can avoid it for live-titled songs)
 function resultIsLive(name){ return /\blive\b|\bin concert\b|\bunplugged\b|\bconcert\b|\bsessions?\b/i.test(name||""); }
