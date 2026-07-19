@@ -275,10 +275,23 @@
   .detail-nav button.rand{background:var(--gold); color:#0a0b0f; border-color:transparent;}
   .detail-nav button.rand:hover{background:#ffc720; color:#0a0b0f;}
   @media (max-width:640px){
+    .detail-overlay{padding:20px 0 0;}   /* full-width on mobile; nav pins to screen bottom */
+    .detail{border-radius:16px 16px 0 0; min-height:calc(100vh - 20px);}
     .detail-banner{flex-direction:column; align-items:flex-start; gap:20px; padding:28px 22px 22px;}
     .detail-cover,.detail-cover-ph{width:140px; height:140px;}
-    .detail-body{padding:22px 22px 32px;}
-    .detail-nav{flex-direction:column;}
+    .detail-body{padding:22px 22px 110px;}   /* bottom padding clears the fixed nav */
+    /* nav pinned to the bottom of the screen: Previous | 🎲 | Next, one row,
+       always reachable for quick hopping between songs */
+    .detail-nav{
+      position:fixed; left:0; right:0; bottom:0; z-index:120; margin-top:0;
+      padding:12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
+      gap:10px; background:color-mix(in srgb, var(--bg-raised) 92%, transparent);
+      backdrop-filter:blur(10px); border-top:1px solid var(--hairline);
+    }
+    .detail-nav button{padding:14px 10px; font-size:15px;}
+    /* text labels drop out so all three fit; arrows + dice remain */
+    .detail-nav .dn-label{display:none;}
+    .detail-nav #detailRandom{flex:0 0 30%; font-size:20px;}   /* dice centred, a touch bigger */
   }
 </style>
 </head>
@@ -346,7 +359,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "1.9";
+const APP_VERSION = "2.3";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -976,16 +989,43 @@ function stopPreview(){
 }
 function togglePreview(key, btn){
   if(!key || !previewUrls[key]) return;
+  // tapping the currently-playing song pauses it
   if(previewKey === key && !previewAudio.paused){
     previewAudio.pause();
     return;
   }
+
+  // Attempt play. On mobile (iOS especially) play() must be called inside the
+  // user-gesture that triggered it. If we just changed src, the audio may not
+  // be ready yet and play() rejects — which caused the intermittent "no sound
+  // on some songs" on mobile. We call play() immediately (inside the gesture)
+  // AND, if it's not ready, retry once it can play through — without needing a
+  // second tap.
+  const tryPlay = ()=>{
+    const p = previewAudio.play();
+    if(p && p.catch){
+      p.catch(()=>{
+        // not ready in the gesture window — play as soon as it can, once.
+        // Guard: only proceed if this is still the song the user asked for.
+        const onReady = ()=>{
+          previewAudio.removeEventListener('canplay', onReady);
+          if(previewKey === key){ previewAudio.play().catch(()=>{}); }
+        };
+        previewAudio.addEventListener('canplay', onReady);
+      });
+    }
+  };
+
   if(previewKey !== key){
     stopPreview();
     previewKey = key;
     previewAudio.src = previewUrls[key];
+    previewAudio.load();          // kick the load explicitly (helps mobile)
+    tryPlay();
+  } else {
+    // same song, was paused — just resume
+    tryPlay();
   }
-  previewAudio.play().catch(()=>{ /* autoplay/interaction guards — ignore */ });
 }
 
 /* Fetch just the preview clip for one song, on demand.
@@ -1258,7 +1298,6 @@ function openDetail(id){
   stopPreview();                         // don't let a clip bleed into the next song
   interactingUntil = Date.now() + 60000; // hold background sweep while viewing a song
   const s=SONGS[id];
-  const chartable=INSTRUMENTS.filter(i=>s.diff[i.key]!==null && s.diff[i.key]!==undefined);
   const diffCards=INSTRUMENTS.map(inst=>{
     const n=s.diff[inst.key];
     const na = (n===null||n===undefined);
@@ -1267,8 +1306,9 @@ function openDetail(id){
     return `<div class="diff-card ${na?'na':''}"><div class="dc-head"><span class="dc-name">${inst.label}</span><span class="dc-num">${na?'Not charted':(n+' / 6')}</span></div><div class="dc-bar">${pips}</div></div>`;
   }).join("");
   const metaItems=[
-    ["Year", s.year], ["Genre", genreList(s)], ["Origin / Source", s.origin],
-    ["Installed on", s.games.join(", ")], ["Playable parts", chartable.length+" instrument"+(chartable.length===1?'':'s')]
+    ["Year", s.year], ["Genre", genreList(s)]
+    // Origin/Source, "Installed on", and "Playable parts" removed to cut vertical
+    // scrolling — the game badges below the title already show where it's installed.
   ].filter(m=>m[1]).map(m=>`<div class="meta-item"><div class="k">${m[0]}</div><div class="v">${esc(String(m[1]))}</div></div>`).join("");
 
   detailContent.innerHTML = `
@@ -1297,9 +1337,9 @@ function openDetail(id){
       <p class="detail-section-label">Difficulty by Instrument</p>
       <div class="diff-grid">${diffCards}</div>
       <div class="detail-nav">
-        <button id="detailPrev">\u2190 Previous</button>
-        <button class="rand" id="detailRandom">🎲 Random song</button>
-        <button id="detailNext">Next \u2192</button>
+        <button id="detailPrev">\u2190 <span class="dn-label">Previous</span></button>
+        <button class="rand" id="detailRandom">🎲 <span class="dn-label">Random song</span></button>
+        <button id="detailNext"><span class="dn-label">Next</span> \u2192</button>
       </div>
     </div>`;
 
