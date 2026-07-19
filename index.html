@@ -228,7 +228,8 @@
   .detail-banner-bg::after{content:""; position:absolute; inset:0; background:linear-gradient(180deg, rgba(10,11,15,0.3), var(--bg-raised) 96%);}
   .detail-cover, .detail-cover-ph{position:relative; z-index:1; width:180px; height:180px; border-radius:14px; flex-shrink:0; box-shadow:0 16px 40px rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08);}
   .detail-cover{object-fit:cover;}
-  .preview-btn{margin-top:12px; display:inline-flex; align-items:center; gap:8px; padding:9px 16px; border-radius:999px;
+  .preview-row{margin-top:12px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;}
+  .preview-btn{display:inline-flex; align-items:center; gap:8px; padding:9px 16px; border-radius:999px;
     border:1px solid rgba(255,255,255,0.18); background:rgba(255,255,255,0.08); color:var(--text);
     font-family:'Archivo','Inter',sans-serif; font-size:14px; font-weight:600; cursor:pointer;
     transition:background .15s, border-color .15s, transform .1s; -webkit-tap-highlight-color:transparent;}
@@ -236,6 +237,14 @@
   .preview-btn:active{transform:scale(0.97);}
   .preview-btn.playing{background:color-mix(in srgb, var(--gold) 22%, transparent); border-color:var(--gold-dim); color:var(--gold);}
   .preview-btn .preview-icon{font-size:12px; line-height:1;}
+  .preview-vol{display:inline-flex; align-items:center; gap:8px;}
+  .preview-vol-icon{font-size:15px; line-height:1; opacity:0.8; width:20px; text-align:center;}
+  .preview-vol-slider{-webkit-appearance:none; appearance:none; width:110px; height:4px; border-radius:999px;
+    background:rgba(255,255,255,0.2); outline:none; cursor:pointer;}
+  .preview-vol-slider::-webkit-slider-thumb{-webkit-appearance:none; appearance:none; width:14px; height:14px;
+    border-radius:50%; background:var(--gold); cursor:pointer; border:none; box-shadow:0 0 0 1px rgba(0,0,0,0.3);}
+  .preview-vol-slider::-moz-range-thumb{width:14px; height:14px; border-radius:50%; background:var(--gold);
+    cursor:pointer; border:none;}
   .detail-cover-ph{display:flex; align-items:center; justify-content:center; font-family:'Anton',sans-serif; font-size:80px; color:#0a0b0f;}
   .detail-titles{position:relative; z-index:1; min-width:0;}
   .detail-titles .eyebrow{font-family:'Archivo','Inter',sans-serif; font-size:12px; letter-spacing:0.16em; text-transform:uppercase; color:var(--gold); margin-bottom:10px;}
@@ -337,7 +346,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "1.8";
+const APP_VERSION = "1.9";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -929,6 +938,23 @@ previewAudio.preload = "none";
 let previewKey = null;   // which song's clip is currently loaded
 let previewBtnKey = null; // which song the on-screen detail button is for
 
+// Preview volume — persisted so it's remembered between sessions.
+let previewVolume = 1;
+try{ const v = parseFloat(localStorage.getItem('rbPreviewVol')); if(!isNaN(v)) previewVolume = Math.min(1, Math.max(0, v)); }catch(e){}
+previewAudio.volume = previewVolume;
+function updateVolIcon(){
+  const el = document.getElementById('previewVolIcon');
+  if(!el) return;
+  el.textContent = previewVolume === 0 ? '🔇' : (previewVolume < 0.5 ? '🔈' : '🔊');
+}
+// persist volume changes (debounced so dragging doesn't hammer storage)
+let _volSaveT;
+previewAudio.addEventListener('volumechange', ()=>{
+  previewVolume = previewAudio.volume;
+  if(_volSaveT) return;
+  _volSaveT = setTimeout(()=>{ _volSaveT=null; try{ localStorage.setItem('rbPreviewVol', String(previewVolume)); }catch(e){} }, 400);
+});
+
 // Single, persistent sync — updates whatever preview button is on screen to
 // match playback state. Attached to the audio ONCE (below) so opening many
 // song pages doesn't pile up duplicate listeners on the shared audio element.
@@ -1253,9 +1279,15 @@ function openDetail(id){
         <div class="eyebrow">Song Details</div>
         <h2>${esc(s.song)}</h2>
         <div class="artist">${esc(s.artist)}</div>
-        <button id="previewBtn" class="preview-btn" style="display:none;">
-          <span class="preview-icon">▶</span><span class="preview-label">Preview</span>
-        </button>
+        <div class="preview-row" id="previewRow" style="display:none;">
+          <button id="previewBtn" class="preview-btn">
+            <span class="preview-icon">▶</span><span class="preview-label">Preview</span>
+          </button>
+          <span class="preview-vol">
+            <span class="preview-vol-icon" id="previewVolIcon">🔊</span>
+            <input type="range" id="previewVol" class="preview-vol-slider" min="0" max="100" value="100" aria-label="Preview volume">
+          </span>
+        </div>
       </div>
     </div>
     <div class="detail-body">
@@ -1295,8 +1327,9 @@ function openDetail(id){
 
   // --- song preview player ---
   const previewBtn = document.getElementById('previewBtn');
+  const previewRow = document.getElementById('previewRow');
   if(previewBtn){
-    const reveal = ()=>{ if(previewUrls[dkey]){ previewBtn.style.display=''; syncPreviewBtn(); } };
+    const reveal = ()=>{ if(previewUrls[dkey] && previewRow){ previewRow.style.display=''; syncPreviewBtn(); } };
     reveal();
     // preview may arrive after the page opens (Deezer still resolving)
     onArtUpdate(dkey, reveal);
@@ -1310,6 +1343,14 @@ function openDetail(id){
     // listeners below use it to sync whatever button is currently on screen
     previewBtnKey = dkey;
     syncPreviewBtn();
+
+    // volume slider — reflects and controls the shared player's volume
+    const vol = document.getElementById('previewVol');
+    if(vol){
+      vol.value = Math.round(previewVolume * 100);
+      updateVolIcon();
+      vol.oninput = ()=>{ previewVolume = (+vol.value)/100; previewAudio.volume = previewVolume; updateVolIcon(); };
+    }
   }
 
   // nav wiring — move within current filtered list if present, else full list
