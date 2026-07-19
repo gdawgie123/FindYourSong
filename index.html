@@ -298,16 +298,20 @@
     .detail{border-radius:16px 16px 0 0; min-height:calc(100vh - 20px);}
     .detail-banner{flex-direction:column; align-items:flex-start; gap:20px; padding:28px 22px 22px;}
     .detail-cover,.detail-cover-ph{width:140px; height:140px;}
-    .detail-body{padding:22px 22px 128px;}   /* bottom padding clears the fixed nav */
+    .detail-body{padding:22px 22px 148px;}   /* bottom padding clears the fixed nav */
     /* nav pinned to the bottom of the screen: Previous | 🎲 | Next, one row,
        always reachable for quick hopping between songs */
     .detail-nav{
       position:fixed; left:0; right:0; bottom:0; z-index:120; margin-top:0;
-      /* extra bottom buffer (22px + safe-area) lifts the buttons clear of the
-         iPhone home-swipe zone so people don't hit a button while swiping up */
-      padding:12px 14px calc(22px + env(safe-area-inset-bottom, 0px));
-      gap:10px; background:color-mix(in srgb, var(--bg-raised) 92%, transparent);
-      backdrop-filter:blur(10px); border-top:1px solid var(--hairline);
+      /* extra bottom buffer lifts the buttons clear of the iPhone home-swipe
+         zone so people don't hit a button while swiping up */
+      padding:12px 14px calc(34px + env(safe-area-inset-bottom, 0px));
+      gap:10px;
+      /* fully opaque background so the bar is solid the instant the page paints.
+         (Previously it was translucent and leaned on backdrop-filter, which
+         composites a frame late on mobile — making the bar look delayed.) */
+      background:var(--bg-raised);
+      border-top:1px solid var(--hairline);
     }
     .detail-nav button{padding:14px 10px; font-size:15px;}
     /* text labels drop out so all three fit; arrows + dice remain */
@@ -380,7 +384,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "2.35";
+const APP_VERSION = "2.36";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
