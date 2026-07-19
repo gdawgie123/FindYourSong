@@ -228,6 +228,14 @@
   .detail-banner-bg::after{content:""; position:absolute; inset:0; background:linear-gradient(180deg, rgba(10,11,15,0.3), var(--bg-raised) 96%);}
   .detail-cover, .detail-cover-ph{position:relative; z-index:1; width:180px; height:180px; border-radius:14px; flex-shrink:0; box-shadow:0 16px 40px rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08);}
   .detail-cover{object-fit:cover;}
+  .preview-btn{margin-top:12px; display:inline-flex; align-items:center; gap:8px; padding:9px 16px; border-radius:999px;
+    border:1px solid rgba(255,255,255,0.18); background:rgba(255,255,255,0.08); color:var(--text);
+    font-family:'Archivo','Inter',sans-serif; font-size:14px; font-weight:600; cursor:pointer;
+    transition:background .15s, border-color .15s, transform .1s; -webkit-tap-highlight-color:transparent;}
+  .preview-btn:hover{background:rgba(255,255,255,0.14); border-color:rgba(255,255,255,0.3);}
+  .preview-btn:active{transform:scale(0.97);}
+  .preview-btn.playing{background:color-mix(in srgb, var(--gold) 22%, transparent); border-color:var(--gold-dim); color:var(--gold);}
+  .preview-btn .preview-icon{font-size:12px; line-height:1;}
   .detail-cover-ph{display:flex; align-items:center; justify-content:center; font-family:'Anton',sans-serif; font-size:80px; color:#0a0b0f;}
   .detail-titles{position:relative; z-index:1; min-width:0;}
   .detail-titles .eyebrow{font-family:'Archivo','Inter',sans-serif; font-size:12px; letter-spacing:0.16em; text-transform:uppercase; color:var(--gold); margin-bottom:10px;}
@@ -329,7 +337,7 @@ const INSTRUMENTS = [
 const PH_COLORS = ["#f2b705","#ff8a3d","#7c5cff","#35d0ba","#ff4fa3","#ff3d5a","#4db8ff","#9d5cff"];
 const state = { q:"", games:new Set(), genre:"", likedOnly:false, sort:{col:"artist", dir:1} };
 
-const APP_VERSION = "1.2";
+const APP_VERSION = "1.4";
 document.getElementById('totalCount').textContent = SONGS.length;
 document.getElementById('foot').innerHTML =
   SONGS.length + " songs \u00b7 Installed on RB1, RB2, RB3, Lego Rock Band & The Beatles: Rock Band<br>Album art from Deezer and the iTunes Search API (loads when online). To update the list, send a new CSV export."
@@ -751,6 +759,8 @@ function deezerLookupRaw(song, key, attempt){
       if(pick && pick.album){
         url = pick.album.cover_xl || pick.album.cover_big || pick.album.cover_medium || pick.album.cover || "";
       }
+      // stash the 30-second preview clip (if any) for the song detail player
+      if(pick && pick.preview){ previewUrls[key] = pick.preview; }
     }
     cleanup(); deezerDone();
     // No usable match from the strict field query? Try once more with the
@@ -891,6 +901,30 @@ function coverPlaceholder(song, cls){
 /* lazy-load list covers */
 let io;
 const shownArt = {};   // songId -> the url we've committed to showing (keeps row & card identical)
+const previewUrls = {}; // artKey -> 30s Deezer preview clip url (for the detail-page player)
+
+/* One shared <audio> for song previews — only ever one clip plays at a time.
+   The button UI updates via the audio's own play/pause/ended events so it stays
+   in sync no matter how playback stops. */
+const previewAudio = new Audio();
+previewAudio.preload = "none";
+let previewKey = null;   // which song's clip is currently loaded
+function stopPreview(){
+  try{ previewAudio.pause(); previewAudio.currentTime = 0; }catch(e){}
+}
+function togglePreview(key, btn){
+  if(!key || !previewUrls[key]) return;
+  if(previewKey === key && !previewAudio.paused){
+    previewAudio.pause();
+    return;
+  }
+  if(previewKey !== key){
+    stopPreview();
+    previewKey = key;
+    previewAudio.src = previewUrls[key];
+  }
+  previewAudio.play().catch(()=>{ /* autoplay/interaction guards — ignore */ });
+}
 // Load the cover for a single placeholder element (idempotent).
 function loadCover(ph){
   if(!ph || ph._coverLoading) return;
@@ -906,17 +940,17 @@ function loadCover(ph){
   const showUrl = (url)=>{
     if(!url) return;
     shownArt[id] = url;
-    const img=new Image();
-    img.onload=()=>{
-      const els = document.querySelectorAll(`#main [data-artid="${id}"]`);
-      els.forEach(el=>{
-        const want = shownArt[id] || url;
-        if(el.tagName==='IMG' && el.getAttribute('src')===want) return;
-        const cls = el.className.replace(/-ph\b/g, '').trim() || 'cover';
-        el.outerHTML = `<img class="${cls}" src="${want}" alt="${esc(song.song)} cover" data-artid="${id}" data-src="deezer">`;
-      });
-    };
-    img.src=url;
+    // Swap in the <img> immediately and let it load in place (the .cover CSS
+    // has a fade-in so it doesn't pop). Previously we waited on a hidden
+    // Image() preload first, which downloaded every cover twice and delayed
+    // the swap until the invisible copy finished — a big part of the lag.
+    const els = document.querySelectorAll(`#main [data-artid="${id}"]`);
+    els.forEach(el=>{
+      const want = shownArt[id] || url;
+      if(el.tagName==='IMG' && el.getAttribute('src')===want) return;
+      const cls = el.className.replace(/-ph\b/g, '').trim() || 'cover';
+      el.outerHTML = `<img class="${cls}" src="${want}" alt="${esc(song.song)} cover" data-artid="${id}" data-src="deezer" loading="lazy">`;
+    });
   };
 
   if(shownArt[id]){
@@ -948,6 +982,7 @@ function observeCovers(){
   // queue vars further down the file are initialized; setTimeout(0) lets the
   // current stack finish so loadCover()'s dependencies all exist.
   setTimeout(loadVisibleCovers, 0);
+  setTimeout(kickCoverPoll, 60);
 }
 
 // load every placeholder currently at/near the viewport, no observer needed
@@ -963,8 +998,25 @@ function loadVisibleCovers(){
 let _covScrollT;
 window.addEventListener('scroll', ()=>{
   if(_covScrollT) return;
-  _covScrollT = setTimeout(()=>{ _covScrollT=null; loadVisibleCovers(); }, 200);
+  _covScrollT = setTimeout(()=>{ _covScrollT=null; loadVisibleCovers(); }, 120);
 }, {passive:true});
+
+/* Idle backstop: the observer may never fire and the user may not scroll, so
+   covers could sit unloaded indefinitely. Poll a few times after each render to
+   pull in whatever's visible, then stop so we're not looping forever. Cheap:
+   it only walks the on-screen placeholders and each loadCover is idempotent. */
+let _covPollTimer=null, _covPollLeft=0;
+function kickCoverPoll(){
+  _covPollLeft = 12;                 // ~12 checks
+  if(_covPollTimer) return;
+  _covPollTimer = setInterval(()=>{
+    loadVisibleCovers();
+    // stop once everything on screen is handled, or after the budget runs out
+    const remaining = [...document.querySelectorAll('#main .cover-ph')]
+      .some(ph=>!ph._coverLoading);
+    if(--_covPollLeft <= 0 || !remaining){ clearInterval(_covPollTimer); _covPollTimer=null; }
+  }, 400);
+}
 
 function buildFilters(){
   const el=document.getElementById('filters'); el.innerHTML="";
@@ -1111,6 +1163,7 @@ function appendRows(){
 const overlay=document.getElementById('detailOverlay');
 const detailContent=document.getElementById('detailContent');
 function openDetail(id){
+  stopPreview();                         // don't let a clip bleed into the next song
   interactingUntil = Date.now() + 60000; // hold background sweep while viewing a song
   const s=SONGS[id];
   const chartable=INSTRUMENTS.filter(i=>s.diff[i.key]!==null && s.diff[i.key]!==undefined);
@@ -1134,6 +1187,9 @@ function openDetail(id){
         <div class="eyebrow">Song Details</div>
         <h2>${esc(s.song)}</h2>
         <div class="artist">${esc(s.artist)}</div>
+        <button id="previewBtn" class="preview-btn" style="display:none;">
+          <span class="preview-icon">▶</span><span class="preview-label">Preview</span>
+        </button>
       </div>
     </div>
     <div class="detail-body">
@@ -1171,6 +1227,29 @@ function openDetail(id){
   fetchArt(s).then(showDetailUrl);
   onArtUpdate(dkey, showDetailUrl);
 
+  // --- song preview player ---
+  const previewBtn = document.getElementById('previewBtn');
+  if(previewBtn){
+    const syncBtn = ()=>{
+      const isThis = previewKey === dkey;
+      const playing = isThis && !previewAudio.paused;
+      previewBtn.querySelector('.preview-icon').textContent = playing ? '❚❚' : '▶';
+      previewBtn.querySelector('.preview-label').textContent = playing ? 'Playing…' : 'Preview';
+      previewBtn.classList.toggle('playing', playing);
+    };
+    const reveal = ()=>{ if(previewUrls[dkey]){ previewBtn.style.display=''; syncBtn(); } };
+    reveal();
+    // preview may arrive after the page opens (Deezer still resolving)
+    onArtUpdate(dkey, reveal);
+    // poll briefly in case the preview lands without an art update
+    let tries=8; const pv=setInterval(()=>{ reveal(); if(previewUrls[dkey]||--tries<=0) clearInterval(pv); }, 500);
+    previewBtn.onclick = ()=>togglePreview(dkey, previewBtn);
+    // keep the button label in sync with actual playback
+    previewAudio.addEventListener('play', syncBtn);
+    previewAudio.addEventListener('pause', syncBtn);
+    previewAudio.addEventListener('ended', syncBtn);
+  }
+
   // nav wiring — move within current filtered list if present, else full list
   const list = currentRows.length ? currentRows : SONGS;
   let pos = list.findIndex(x=>x._id===id);
@@ -1182,7 +1261,7 @@ function openDetail(id){
   overlay.scrollTop=0;
   document.body.style.overflow='hidden';
 }
-function closeDetail(){ overlay.classList.remove('open'); document.body.style.overflow=''; interactingUntil = Date.now() + 500; setTimeout(pumpQueue, 600); }
+function closeDetail(){ stopPreview(); overlay.classList.remove('open'); document.body.style.overflow=''; interactingUntil = Date.now() + 500; setTimeout(pumpQueue, 600); }
 document.getElementById('detailClose').onclick=closeDetail;
 overlay.addEventListener('click', e=>{ if(e.target===overlay) closeDetail(); });
 document.addEventListener('keydown', e=>{
